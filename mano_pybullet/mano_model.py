@@ -1,5 +1,6 @@
 """This module describes the ManoModel."""
 
+import functools
 import os
 import pickle
 import warnings
@@ -14,29 +15,37 @@ __all__ = ('ManoModel')
 class ManoModel:
     """The helper class to work with a MANO hand model."""
 
-    def __init__(self, left_hand=False):
+    def __init__(self, left_hand=False, models_dir=None):
         """Load the hand model from a pickled file.
 
         Keyword Arguments:
-            left_hand {bool} -- create a left hand myodel (default: {False})
+            left_hand {bool} -- create a left hand model (default: {False})
+            models_dir {str} -- path to the pickled model files (default: {None})
         """
-        if left_hand:
-            path = os.path.expandvars('$MANO_MODELS_DIR/MANO_LEFT.pkl')
-        else:
-            path = os.path.expandvars('$MANO_MODELS_DIR/MANO_RIGHT.pkl')
+        if models_dir is None:
+            models_dir = os.path.expandvars('$MANO_MODELS_DIR')
 
+        fname = f'MANO_{["RIGHT", "LEFT"][left_hand]}.pkl'
+        self._model = self._load(os.path.join(models_dir, fname))
+        self._is_left_hand = left_hand
+
+    @staticmethod
+    @functools.lru_cache(maxsize=2)
+    def _load(path):
+        """Load the model from disk.
+
+        Arguments:
+            path {str} -- path to the pickled model file
+
+        Returns:
+            chumpy array -- MANO model
+        """
         with open(path, 'rb') as pick_file:
             with warnings.catch_warnings():  # suppress chumpy warnings
                 warnings.filterwarnings("ignore", category=DeprecationWarning)
-                model = pickle.load(pick_file, encoding='latin1')
+                return pickle.load(pick_file, encoding='latin1')
 
-        self._model = model
-        self._betas = np.zeros(self.shapedirs.shape[-1])
-        self._pose = np.zeros((16, 3))
-        self._trans = np.zeros(3)
-        self._is_left_hand = left_hand
-
-    @ property
+    @property
     def is_left_hand(self):
         """This is the model of a left hand.
 
@@ -45,7 +54,7 @@ class ManoModel:
         """
         return self._is_left_hand
 
-    @ property
+    @property
     def faces(self):
         """Hand mesh faces indices.
 
@@ -54,7 +63,7 @@ class ManoModel:
         """
         return self._model.get('f')
 
-    @ property
+    @property
     def weights(self):
         """Vertex weights.
 
@@ -63,7 +72,7 @@ class ManoModel:
         """
         return self._model.get('weights')
 
-    @ property
+    @property
     def kintree_table(self):
         """Kinematic tree.
 
@@ -72,7 +81,7 @@ class ManoModel:
         """
         return np.int32(self._model.get('kintree_table'))
 
-    @ property
+    @property
     def shapedirs(self):
         """Shape mapping matrix.
 
@@ -81,7 +90,7 @@ class ManoModel:
         """
         return self._model.get('shapedirs')
 
-    @ property
+    @property
     def posedirs(self):
         """Pose mapping matrix.
 
@@ -90,7 +99,7 @@ class ManoModel:
         """
         return self._model.get('posedirs')
 
-    @ property
+    @property
     def link_names(self):
         """Human readable link names.
 
@@ -100,7 +109,7 @@ class ManoModel:
         fingers = ('index', 'middle', 'pinky', 'ring', 'thumb')
         return ['palm'] + ['{}{}'.format(f, i) for f in fingers for i in range(1, 4)]
 
-    @ property
+    @property
     def tip_links(self):
         """Tip link indices.
 
@@ -109,21 +118,25 @@ class ManoModel:
         """
         return [3, 6, 12, 9, 15]
 
-    def origins(self, pose=None, trans=None):
+    def origins(self, betas=None, pose=None, trans=None):
         """Joint origins.
 
         Keyword Arguments:
+            betas {array} -- shape coefficients, vector 1 x 10 (default: {None})
             pose {array} -- hand pose, matrix Nl x 3 (default: {None})
             trans {array} -- translation, vector 1 x 3 (default: {None})
 
         Returns:
             array -- matrix Nl x 3, where Nl - number of links
         """
-        origins = self._model.get('J').copy()
+        origins = self._model.get('J')
+        if betas is not None:
+            regressor = self._model.get('J_regressor')
+            origins = regressor.dot(self.vertices(betas=betas))
         if pose is not None:
             raise NotImplementedError
         if trans is not None:
-            origins = origins + self._trans
+            origins = origins + trans
         return origins
 
     def vertices(self, betas=None, pose=None, trans=None):
@@ -141,8 +154,9 @@ class ManoModel:
         if betas is not None:
             vertices = vertices + np.dot(self.shapedirs, betas)
         if pose is not None:
-            pose_mapped = [rvec2mat(rvec) - np.eye(3) for rvec in pose[1:]]
-            vertices = vertices + np.dot(self.posedirs, np.array(pose_mapped).flatten())
+            pose = np.ravel([rvec2mat(rvec) - np.eye(3) for rvec in pose[1:]])
+            vertices = vertices + np.dot(self.posedirs, pose)
+            raise NotImplementedError
         if trans is not None:
-            vertices = vertices + self._trans
+            vertices = vertices + trans
         return vertices

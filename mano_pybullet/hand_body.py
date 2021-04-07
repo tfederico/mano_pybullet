@@ -42,6 +42,7 @@ class HandBody:
         self._model = hand_model
         self._flags = flags
         self._vertices = hand_model.vertices(betas=shape_betas)
+        self._origin = self._model.origins()[0]
         self._joint_indices = []
         self._joint_limits = []
         self._link_mapping = {}
@@ -81,7 +82,7 @@ class HandBody:
         """Get current hand state.
 
         Returns:
-            tuple -- base position, orientation, joint positions, velocities, torques
+            tuple -- base position, orientation, forces, joint positions, velocities, torques
         """
         base_pos, base_orn = self._client.getBasePositionAndOrientation(self._body_id)
         if self._constraint_id != -1:
@@ -138,8 +139,10 @@ class HandBody:
             tuple -- trans, pose
         """
         base_pos, base_orn, _, angles, _, _ = self.get_state()
-        mano_pose = self._model.angles_to_mano(angles, pb2mat(base_orn))
-        return base_pos, mano_pose
+        basis = pb2mat(base_orn)
+        trans = base_pos - self._origin + basis @ self._origin
+        mano_pose = self._model.angles_to_mano(angles, basis)
+        return trans, mano_pose
 
     def reset_from_mano(self, trans, mano_pose):
         """Reset hand state from a Mano pose.
@@ -149,6 +152,7 @@ class HandBody:
             trans {vec3} -- hand translation
         """
         angles, basis = self._model.mano_to_angles(mano_pose)
+        trans = trans + self._origin - basis @ self._origin
         self.reset(trans, mat2pb(basis), angles)
 
     def set_target_from_mano(self, trans, mano_pose):
@@ -159,6 +163,7 @@ class HandBody:
             trans {vec3} -- hand translation
         """
         angles, basis = self._model.mano_to_angles(mano_pose)
+        trans = trans + self._origin - basis @ self._origin
         self.set_target(trans, mat2pb(basis), angles)
 
     def _make_body(self):
